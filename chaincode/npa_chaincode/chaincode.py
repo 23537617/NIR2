@@ -149,7 +149,7 @@ class NPAChaincode:
             if not validate_status(new_status):
                 return format_response(
                     False,
-                    error=f"Недопустимый статус: {new_status}. Допустимые значения: CREATED, IN_PROGRESS, COMPLETED, CANCELLED"
+                    error=f"Недопустимый статус: {new_status}. Допустимые значения: CREATED, IN_PROGRESS, COMPLETED, CANCELLED, CONFIRMED"
                 )
             
             # Получаем задачу
