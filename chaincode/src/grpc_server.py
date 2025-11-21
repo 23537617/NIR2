@@ -76,7 +76,15 @@ class ChaincodeServer:
         Returns:
             Результат выполнения
         """
-        from chaincode import invoke_chaincode
+        import sys
+        from pathlib import Path
+        
+        # Добавляем путь к npa_chaincode
+        chaincode_path = Path(__file__).parent.parent / "npa_chaincode"
+        if str(chaincode_path) not in sys.path:
+            sys.path.insert(0, str(chaincode_path.parent))
+        
+        from npa_chaincode.chaincode import invoke_chaincode
         
         stub = ChaincodeStub(channel_id, tx_id)
         result_bytes = invoke_chaincode(stub, function, args)

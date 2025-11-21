@@ -10,10 +10,11 @@ import logging
 import os
 import sys
 
-# Добавляем путь к модулю chaincode
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Добавляем путь к npa_chaincode
+chaincode_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, chaincode_path)
 
-from chaincode import TaskDocumentChaincode
+from npa_chaincode import NPAChaincode
 
 # Упрощенная заглушка для REST API
 class ChaincodeStub:
@@ -38,6 +39,23 @@ class ChaincodeStub:
     def create_composite_key(self, object_type: str, attributes: list) -> str:
         """Создать составной ключ"""
         return f"{object_type}:{':'.join(attributes)}"
+    
+    def del_state(self, key: str) -> None:
+        """Удалить состояние"""
+        if key in self.state:
+            del self.state[key]
+    
+    def get_state_by_range(self, start_key: str, end_key: str):
+        """Получить диапазон значений (заглушка для REST API)"""
+        return []
+    
+    def get_state_by_partial_composite_key(self, object_type: str, attributes: list):
+        """Получить по частичному составному ключу (заглушка для REST API)"""
+        return []
+    
+    def get_history_for_key(self, key: str):
+        """Получить историю для ключа (заглушка для REST API)"""
+        return []
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,7 +88,7 @@ class RESTChaincodeStub(ChaincodeStub):
 
 # Глобальный экземпляр chaincode
 stub = ChaincodeStub()
-chaincode = TaskDocumentChaincode(stub)
+chaincode = NPAChaincode(stub)
 
 
 @app.route('/health', methods=['GET'])
