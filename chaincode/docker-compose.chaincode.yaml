@@ -19,6 +19,23 @@ services:
       - ./src:/app/src
     command: python src/rest_api.py
 
+  chaincode-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chaincode-server
+    ports:
+      - "9999:9999"
+    environment:
+      - CHAINCODE_SERVER_PORT=9999
+      - PYTHONUNBUFFERED=1
+    networks:
+      - fabric-network
+    volumes:
+      - ./src:/app/src
+    command: python src/grpc_server.py
+    restart: unless-stopped
+
   chaincode-grpc:
     build:
       context: .
