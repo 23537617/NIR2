@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  chaincode-rest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chaincode-rest
+    ports:
+      - "8080:8080"
+      - "9999:9999"
+    environment:
+      - REST_API_PORT=8080
+      - REST_API_HOST=0.0.0.0
+      - CHAINCODE_SERVER_PORT=9999
+    networks:
+      - fabric-network
+    volumes:
+      - ./src:/app/src
+    command: python src/rest_api.py
+
+  chaincode-grpc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chaincode-grpc
+    ports:
+      - "9999:9999"
+    environment:
+      - CHAINCODE_SERVER_PORT=9999
+    networks:
+      - fabric-network
+    volumes:
+      - ./src:/app/src
+    command: python src/grpc_server.py
+
+networks:
+  fabric-network:
+    external: true
+

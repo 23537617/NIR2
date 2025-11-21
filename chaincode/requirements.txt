@@ -1,0 +1,7 @@
+flask>=2.3.0
+flask-cors>=4.0.0
+grpcio>=1.57.0
+grpcio-tools>=1.57.0
+protobuf>=4.23.0
+requests>=2.31.0
+
