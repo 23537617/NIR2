@@ -413,3 +413,5 @@ def download_document(hash: str, output_path: Optional[str] = None,
     client = get_ipfs_client(ipfs_host)
     return client.download_document(hash, output_path=output_path)
 
+
+

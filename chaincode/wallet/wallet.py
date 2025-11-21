@@ -489,3 +489,5 @@ def list_identities(wallet_path: str = "./wallet") -> List[Dict[str, Any]]:
     wallet = get_wallet(wallet_path)
     return wallet.list_identities()
 
+
+

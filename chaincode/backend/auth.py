@@ -197,3 +197,5 @@ def get_user_info(user_role: Optional[UserRole] = Depends(get_user_role_from_hea
         "authenticated": True
     }
 
+
+

@@ -136,3 +136,5 @@ python client.py --connection connection-org1.json --channel npa-channel
 - Проверьте корректность путей к сертификатам в connection profile
 - Для production использования настройте TLS и аутентификацию
 
+
+
