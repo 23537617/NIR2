@@ -234,26 +234,6 @@ services:
       - fabric-network
 
   # ============================================================================
-  # IPFS Daemon
-  # ============================================================================
-  ipfs:
-    container_name: ipfs-daemon
-    image: ipfs/kubo:latest
-    environment:
-      - IPFS_PROFILE=server
-    ports:
-      - "4001:4001"   # Swarm port
-      - "5001:5001"   # API port
-      - "8081:8080"   # Gateway port (8080 внутри контейнера, 8081 снаружи)
-    volumes:
-      - ipfs-data:/data/ipfs
-      - ipfs-staging:/export
-    networks:
-      - fabric-network
-    restart: unless-stopped
-    command: daemon --migrate=true --enable-gc=true
-
-  # ============================================================================
   # Python Chaincode
   # ============================================================================
   chaincode:
@@ -311,6 +291,26 @@ services:
       - ipfs
     restart: unless-stopped
 
+  # ============================================================================
+  # IPFS Daemon
+  # ============================================================================
+  ipfs:
+    container_name: ipfs-daemon
+    image: ipfs/kubo:latest
+    environment:
+      - IPFS_PROFILE=server
+    ports:
+      - "4001:4001"   # Swarm port
+      - "5001:5001"   # API port
+      - "8081:8080"   # Gateway port (8080 внутри контейнера, 8081 снаружи, чтобы не конфликтовать с chaincode REST API)
+    volumes:
+      - ipfs-data:/data/ipfs
+      - ipfs-staging:/export
+    networks:
+      - fabric-network
+    restart: unless-stopped
+    command: daemon --migrate=true --enable-gc=true
+
 networks:
   fabric-network:
     driver: bridge
@@ -324,3 +324,4 @@ volumes:
     driver: local
   ipfs-staging:
     driver: local
+
