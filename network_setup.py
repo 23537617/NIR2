@@ -101,8 +101,8 @@ def stop_network_clean():
 def show_status():
     """Показывает статус контейнеров"""
     base_dir = Path(__file__).parent
-    print("\n📊 Статус контейнеров:")
-    run_command(["docker", "compose", "ps"], cwd=base_dir, check=False)
+    print("\n📊 Статус контейнеров (все):")
+    run_command(["docker", "compose", "ps", "-a"], cwd=base_dir, check=False)
 
 
 def show_logs():

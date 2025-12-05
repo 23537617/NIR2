@@ -250,48 +250,319 @@ class FabricConfigGenerator:
             'Profiles': {
                 'TwoOrgsOrdererGenesis': {
                     'Orderer': {
-                        '<<': '*Orderer',
-                        'Organizations': [
-                            {
-                                '<<': '*OrdererOrg'
+                        'OrdererType': 'etcdraft',
+                        'EtcdRaft': {
+                            'Consenters': [
+                                {
+                                    'Host': 'orderer.example.com',
+                                    'Port': 7050,
+                                    'ClientTLSCert': '../organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt',
+                                    'ServerTLSCert': '../organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt'
+                                }
+                            ]
+                        },
+                        'Organizations': ['OrdererOrg'],
+                        'Policies': {
+                            'Readers': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Readers'
+                            },
+                            'Writers': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Writers'
+                            },
+                            'Admins': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'MAJORITY Admins'
+                            },
+                            'BlockValidation': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Writers'
                             }
-                        ]
+                        },
+                        'Capabilities': {
+                            'V2_0': True
+                        },
+                        'BatchTimeout': '2s',
+                        'BatchSize': {
+                            'MaxMessageCount': 10,
+                            'AbsoluteMaxBytes': '99 MB',
+                            'PreferredMaxBytes': '512 KB'
+                        }
                     },
                     'Consortiums': {
                         'SampleConsortium': {
-                            'Organizations': [
-                                {
-                                    '<<': '*Org1MSP'
-                                },
-                                {
-                                    '<<': '*Org2MSP'
-                                }
-                            ]
+                            'Organizations': ['Org1MSP', 'Org2MSP']
                         }
                     }
                 },
                 'TwoOrgsChannel': {
                     'Consortium': 'SampleConsortium',
                     'Application': {
-                        '<<': '*Application',
-                        'Organizations': [
-                            {
-                                '<<': '*Org1MSP'
+                        'Organizations': ['Org1MSP', 'Org2MSP'],
+                        'Policies': {
+                            'Readers': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Readers'
                             },
-                            {
-                                '<<': '*Org2MSP'
+                            'Writers': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Writers'
+                            },
+                            'Admins': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'MAJORITY Admins'
+                            },
+                            'LifecycleEndorsement': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'MAJORITY Endorsement'
+                            },
+                            'Endorsement': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'MAJORITY Endorsement'
                             }
-                        ]
+                        },
+                        'Capabilities': {
+                            'V2_0': True
+                        }
+                    },
+                    'Orderer': {
+                        'OrdererType': 'etcdraft',
+                        'EtcdRaft': {
+                            'Consenters': [
+                                {
+                                    'Host': 'orderer.example.com',
+                                    'Port': 7050,
+                                    'ClientTLSCert': '../organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt',
+                                    'ServerTLSCert': '../organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt'
+                                }
+                            ]
+                        },
+                        'Organizations': ['OrdererOrg'],
+                        'Policies': {
+                            'Readers': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Readers'
+                            },
+                            'Writers': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Writers'
+                            },
+                            'Admins': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'MAJORITY Admins'
+                            },
+                            'BlockValidation': {
+                                'Type': 'ImplicitMeta',
+                                'Rule': 'ANY Writers'
+                            }
+                        },
+                        'Capabilities': {
+                            'V2_0': True
+                        },
+                        'BatchTimeout': '2s',
+                        'BatchSize': {
+                            'MaxMessageCount': 10,
+                            'AbsoluteMaxBytes': '99 MB',
+                            'PreferredMaxBytes': '512 KB'
+                        }
                     }
                 }
             }
         }
         
         config_path = self.config_dir / "configtx.yaml"
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(configtx, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        
+        # PyYAML не поддерживает anchors/aliases напрямую через dump,
+        # поэтому генерируем YAML вручную для правильного использования anchors
+        self._write_configtx_with_anchors(config_path, configtx)
+        
         print(f"✓ Создан файл: {config_path}")
         return config_path
+    
+    def _write_configtx_with_anchors(self, config_path, configtx):
+        """Записывает configtx.yaml с правильными YAML anchors и aliases"""
+        lines = []
+        
+        # Organizations с anchors
+        lines.append("Organizations:")
+        org_anchors = {}
+        
+        for i, org in enumerate(configtx['Organizations']):
+            # Anchor имя должно совпадать с Name организации
+            anchor_name = org['Name']
+            org_anchors[org['Name']] = anchor_name
+            
+            lines.append(f"- &{anchor_name}")
+            lines.append(f"  Name: {org['Name']}")
+            lines.append(f"  ID: {org['ID']}")
+            lines.append(f"  MSPDir: {org['MSPDir']}")
+            lines.append("  Policies:")
+            for policy_name, policy in org['Policies'].items():
+                lines.append(f"    {policy_name}:")
+                lines.append(f"      Type: {policy['Type']}")
+                lines.append(f"      Rule: {policy['Rule']}")
+            
+            if 'AnchorPeers' in org:
+                lines.append("  AnchorPeers:")
+                for anchor_peer in org['AnchorPeers']:
+                    lines.append(f"  - Host: {anchor_peer['Host']}")
+                    lines.append(f"    Port: {anchor_peer['Port']}")
+        
+        lines.append("")
+        
+        # Capabilities
+        lines.append("Capabilities:")
+        for cap_type, cap_value in configtx['Capabilities'].items():
+            lines.append(f"  {cap_type}:")
+            # cap_value может быть словарем {'V2_0': True} или просто True
+            if isinstance(cap_value, dict):
+                for version, enabled in cap_value.items():
+                    lines.append(f"    {version}: {str(enabled).lower()}")
+            else:
+                lines.append(f"    V2_0: {str(cap_value).lower()}")
+        lines.append("")
+        
+        # Application
+        lines.append("Application:")
+        lines.append("  Organizations: null")
+        lines.append("  Policies:")
+        for policy_name, policy in configtx['Application']['Policies'].items():
+            lines.append(f"    {policy_name}:")
+            lines.append(f"      Type: {policy['Type']}")
+            lines.append(f"      Rule: {policy['Rule']}")
+        lines.append("  Capabilities:")
+        lines.append(f"    V2_0: {str(configtx['Application']['Capabilities']['V2_0']).lower()}")
+        lines.append("")
+        
+        # Orderer
+        lines.append("Orderer:")
+        lines.append(f"  OrdererType: {configtx['Orderer']['OrdererType']}")
+        lines.append("  EtcdRaft:")
+        lines.append("    Consenters:")
+        for consenter in configtx['Orderer']['EtcdRaft']['Consenters']:
+            lines.append(f"    - Host: {consenter['Host']}")
+            lines.append(f"      Port: {consenter['Port']}")
+            lines.append(f"      ClientTLSCert: {consenter['ClientTLSCert']}")
+            lines.append(f"      ServerTLSCert: {consenter['ServerTLSCert']}")
+        lines.append("  Organizations: null")
+        lines.append("  Policies:")
+        for policy_name, policy in configtx['Orderer']['Policies'].items():
+            lines.append(f"    {policy_name}:")
+            lines.append(f"      Type: {policy['Type']}")
+            lines.append(f"      Rule: {policy['Rule']}")
+        lines.append("  Capabilities:")
+        lines.append(f"    V2_0: {str(configtx['Orderer']['Capabilities']['V2_0']).lower()}")
+        lines.append(f"  BatchTimeout: {configtx['Orderer']['BatchTimeout']}")
+        lines.append("  BatchSize:")
+        batch_size = configtx['Orderer']['BatchSize']
+        lines.append(f"    MaxMessageCount: {batch_size['MaxMessageCount']}")
+        lines.append(f"    AbsoluteMaxBytes: {batch_size['AbsoluteMaxBytes']}")
+        lines.append(f"    PreferredMaxBytes: {batch_size['PreferredMaxBytes']}")
+        lines.append("")
+        
+        # Channel
+        lines.append("Channel:")
+        lines.append("  Policies:")
+        for policy_name, policy in configtx['Channel']['Policies'].items():
+            lines.append(f"    {policy_name}:")
+            lines.append(f"      Type: {policy['Type']}")
+            lines.append(f"      Rule: {policy['Rule']}")
+        lines.append("  Capabilities:")
+        lines.append(f"    V2_0: {str(configtx['Channel']['Capabilities']['V2_0']).lower()}")
+        lines.append("")
+        
+        # Profiles с aliases
+        lines.append("Profiles:")
+        lines.append("  TwoOrgsOrdererGenesis:")
+        lines.append("    Orderer:")
+        lines.append("      OrdererType: etcdraft")
+        lines.append("      EtcdRaft:")
+        lines.append("        Consenters:")
+        for consenter in configtx['Orderer']['EtcdRaft']['Consenters']:
+            lines.append(f"        - Host: {consenter['Host']}")
+            lines.append(f"          Port: {consenter['Port']}")
+            lines.append(f"          ClientTLSCert: {consenter['ClientTLSCert']}")
+            lines.append(f"          ServerTLSCert: {consenter['ServerTLSCert']}")
+        lines.append(f"      Organizations:")
+        lines.append(f"      - *{org_anchors['OrdererOrg']}")
+        lines.append("      Policies:")
+        for policy_name, policy in configtx['Orderer']['Policies'].items():
+            lines.append(f"        {policy_name}:")
+            lines.append(f"          Type: {policy['Type']}")
+            lines.append(f"          Rule: {policy['Rule']}")
+        lines.append("      Capabilities:")
+        lines.append(f"        V2_0: {str(configtx['Orderer']['Capabilities']['V2_0']).lower()}")
+        lines.append(f"      BatchTimeout: {configtx['Orderer']['BatchTimeout']}")
+        lines.append("      BatchSize:")
+        lines.append(f"        MaxMessageCount: {batch_size['MaxMessageCount']}")
+        lines.append(f"        AbsoluteMaxBytes: {batch_size['AbsoluteMaxBytes']}")
+        lines.append(f"        PreferredMaxBytes: {batch_size['PreferredMaxBytes']}")
+        lines.append("    Consortiums:")
+        lines.append("      SampleConsortium:")
+        lines.append("        Organizations:")
+        lines.append(f"        - *{org_anchors['Org1MSP']}")
+        lines.append(f"        - *{org_anchors['Org2MSP']}")
+        # Добавляем Channel Policies в профиль для генерации genesis блока
+        lines.append("    Policies:")
+        for policy_name, policy in configtx['Channel']['Policies'].items():
+            lines.append(f"      {policy_name}:")
+            lines.append(f"        Type: {policy['Type']}")
+            lines.append(f"        Rule: {policy['Rule']}")
+        lines.append("    Capabilities:")
+        lines.append(f"      V2_0: {str(configtx['Channel']['Capabilities']['V2_0']).lower()}")
+        lines.append("  TwoOrgsChannel:")
+        lines.append("    Consortium: SampleConsortium")
+        lines.append("    Application:")
+        lines.append("      Organizations:")
+        lines.append(f"      - *{org_anchors['Org1MSP']}")
+        lines.append(f"      - *{org_anchors['Org2MSP']}")
+        lines.append("      Policies:")
+        for policy_name, policy in configtx['Application']['Policies'].items():
+            lines.append(f"        {policy_name}:")
+            lines.append(f"          Type: {policy['Type']}")
+            lines.append(f"          Rule: {policy['Rule']}")
+        lines.append("      Capabilities:")
+        lines.append(f"        V2_0: {str(configtx['Application']['Capabilities']['V2_0']).lower()}")
+        # Добавляем Orderer секцию в профиль канала для поддержки orderer endpoints
+        if 'Orderer' in configtx['Profiles']['TwoOrgsChannel']:
+            lines.append("    Orderer:")
+            lines.append("      OrdererType: etcdraft")
+            lines.append("      EtcdRaft:")
+            lines.append("        Consenters:")
+            orderer_profile = configtx['Profiles']['TwoOrgsChannel']['Orderer']
+            for consenter in orderer_profile['EtcdRaft']['Consenters']:
+                lines.append(f"        - Host: {consenter['Host']}")
+                lines.append(f"          Port: {consenter['Port']}")
+                lines.append(f"          ClientTLSCert: {consenter['ClientTLSCert']}")
+                lines.append(f"          ServerTLSCert: {consenter['ServerTLSCert']}")
+            lines.append("      Organizations:")
+            lines.append(f"      - *{org_anchors['OrdererOrg']}")
+            lines.append("      Policies:")
+            for policy_name, policy in orderer_profile['Policies'].items():
+                lines.append(f"        {policy_name}:")
+                lines.append(f"          Type: {policy['Type']}")
+                lines.append(f"          Rule: {policy['Rule']}")
+            lines.append("      Capabilities:")
+            lines.append(f"        V2_0: {str(orderer_profile['Capabilities']['V2_0']).lower()}")
+            lines.append(f"      BatchTimeout: {orderer_profile['BatchTimeout']}")
+            lines.append("      BatchSize:")
+            batch_size = orderer_profile['BatchSize']
+            lines.append(f"        MaxMessageCount: {batch_size['MaxMessageCount']}")
+            lines.append(f"        AbsoluteMaxBytes: {batch_size['AbsoluteMaxBytes']}")
+            lines.append(f"        PreferredMaxBytes: {batch_size['PreferredMaxBytes']}")
+        # Добавляем Channel Policies в профиль для генерации транзакции создания канала
+        lines.append("    Policies:")
+        for policy_name, policy in configtx['Channel']['Policies'].items():
+            lines.append(f"      {policy_name}:")
+            lines.append(f"        Type: {policy['Type']}")
+            lines.append(f"        Rule: {policy['Rule']}")
+        lines.append("    Capabilities:")
+        lines.append(f"      V2_0: {str(configtx['Channel']['Capabilities']['V2_0']).lower()}")
+        
+        # Записываем в файл
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
     
     def generate_docker_compose(self):
         """Генерирует docker-compose.yaml с CA серверами"""
@@ -331,7 +602,7 @@ class FabricConfigGenerator:
                         'FABRIC_CA_SERVER_OPERATIONS_LISTENADDRESS=0.0.0.0:9444'
                     ],
                     'ports': [
-                        '7054:7054',
+                        '7154:7054',
                         '9444:9444'
                     ],
                     'command': 'sh -c "fabric-ca-server start -b admin:adminpw -d"',
@@ -427,8 +698,9 @@ class FabricConfigGenerator:
                         'CORE_PEER_GOSSIP_BOOTSTRAP=peer0.org1.example.com:7051',
                         'CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.org1.example.com:7051',
                         'CORE_PEER_LOCALMSPID=Org1MSP',
-                        'CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:9443',
+                        'CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:8443',
                         'CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peers":[{"name":"peer0.org1.example.com","address":"peer0.org1.example.com:7052","tls_required":true,"client_tls_cert":"/etc/hyperledger/fabric/peer/tls/ca.crt","root_cert":"/etc/hyperledger/fabric/peer/tls/ca.crt"}]}',
+                        'CORE_PEER_EXTERNALBUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder","propagateEnvironment":["CHAINCODE_AS_A_SERVICE"]}]',
                         'CORE_PEER_TLS_CLIENTAUTHREQUIRED=true',
                         'CORE_PEER_TLS_CLIENTROOTCAS_FILES=/etc/hyperledger/fabric/tls/ca.crt',
                         'CORE_PEER_TLS_CLIENTCERT_FILE=/etc/hyperledger/fabric/tls/server.crt',
@@ -452,7 +724,7 @@ class FabricConfigGenerator:
                     'command': 'peer node start',
                     'ports': [
                         '7051:7051',
-                        '9443:9443'
+                        '8443:8443'
                     ],
                     'depends_on': [
                         'orderer0',
@@ -497,8 +769,9 @@ class FabricConfigGenerator:
                         'CORE_PEER_GOSSIP_BOOTSTRAP=peer0.org2.example.com:9051',
                         'CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.org2.example.com:9051',
                         'CORE_PEER_LOCALMSPID=Org2MSP',
-                        'CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:9444',
+                        'CORE_OPERATIONS_LISTENADDRESS=0.0.0.0:8444',
                         'CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG={"peers":[{"name":"peer0.org2.example.com","address":"peer0.org2.example.com:9052","tls_required":true,"client_tls_cert":"/etc/hyperledger/fabric/peer/tls/ca.crt","root_cert":"/etc/hyperledger/fabric/peer/tls/ca.crt"}]}',
+                        'CORE_PEER_EXTERNALBUILDERS=[{"name":"ccaas_builder","path":"/opt/hyperledger/ccaas_builder","propagateEnvironment":["CHAINCODE_AS_A_SERVICE"]}]',
                         'CORE_PEER_TLS_CLIENTAUTHREQUIRED=true',
                         'CORE_PEER_TLS_CLIENTROOTCAS_FILES=/etc/hyperledger/fabric/tls/ca.crt',
                         'CORE_PEER_TLS_CLIENTCERT_FILE=/etc/hyperledger/fabric/tls/server.crt',
@@ -522,7 +795,7 @@ class FabricConfigGenerator:
                     'command': 'peer node start',
                     'ports': [
                         '9051:9051',
-                        '9444:9444'
+                        '8444:8444'
                     ],
                     'depends_on': [
                         'orderer0',

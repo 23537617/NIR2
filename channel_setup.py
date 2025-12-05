@@ -44,6 +44,29 @@ class ChannelSetup:
             "domain": "example.com"
         }
     
+    def find_orderer_ca_cert(self):
+        """Находит CA сертификат orderer в нескольких возможных местах"""
+        orderer_tls_dir = self.orgs_dir / "ordererOrganizations" / self.orderer["domain"] / "orderers" / self.orderer["host"] / "tls"
+        orderer_msp_dir = self.orgs_dir / "ordererOrganizations" / self.orderer["domain"] / "orderers" / self.orderer["host"] / "msp" / "tlscacerts"
+        
+        # Сначала пробуем tls/ca.crt (стандартное место после cryptogen)
+        if (orderer_tls_dir / "ca.crt").exists():
+            return orderer_tls_dir / "ca.crt"
+        
+        # Затем пробуем tlscacerts/*.pem
+        if orderer_msp_dir.exists():
+            pem_files = list(orderer_msp_dir.glob("*.pem"))
+            if pem_files:
+                return pem_files[0]
+        
+        # Также пробуем tls/*.crt
+        if orderer_tls_dir.exists():
+            crt_files = list(orderer_tls_dir.glob("*.crt"))
+            if crt_files:
+                return crt_files[0]
+        
+        return None
+    
     def check_prerequisites(self):
         """Проверяет наличие необходимых файлов и запущенных контейнеров"""
         print("\n" + "="*60)
@@ -67,7 +90,54 @@ class ChannelSetup:
                 return False
             print(f"✓ Найден файл: {anchor_tx}")
         
+        # Проверка CA сертификата orderer
+        orderer_ca = self.find_orderer_ca_cert()
+        if not orderer_ca:
+            print(f"❌ Не найден CA сертификат orderer")
+            print("   Проверьте, что криптографические материалы сгенерированы")
+            return False
+        print(f"✓ Найден CA сертификат orderer: {orderer_ca}")
+        
         # Проверка запущенных контейнеров
+        required_containers = [
+            "orderer0",
+            "peer0.org1.example.com",
+            "peer0.org2.example.com"
+        ]
+        
+        # Ждем запуска контейнеров (максимум 30 секунд)
+        print("\nОжидание запуска контейнеров...")
+        max_wait = 30
+        interval = 2
+        waited = 0
+        all_ready = False
+        
+        while waited < max_wait and not all_ready:
+            try:
+                result = subprocess.run(
+                    ["docker", "ps", "--format", "{{.Names}}"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                running_containers = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
+                
+                all_ready = True
+                for container in required_containers:
+                    if container not in running_containers:
+                        all_ready = False
+                        break
+                
+                if not all_ready:
+                    time.sleep(interval)
+                    waited += interval
+                    if waited % 6 == 0:  # Каждые 6 секунд показываем прогресс
+                        print(f"   Ожидание... ({waited}/{max_wait} секунд)")
+            except subprocess.CalledProcessError:
+                print("❌ Не удалось проверить статус контейнеров")
+                return False
+        
+        # Проверяем финальный статус
         try:
             result = subprocess.run(
                 ["docker", "ps", "--format", "{{.Names}}"],
@@ -75,19 +145,33 @@ class ChannelSetup:
                 text=True,
                 check=True
             )
-            running_containers = result.stdout.strip().split('\n')
+            running_containers = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
             
-            required_containers = [
-                "orderer0",
-                "peer0.org1.example.com",
-                "peer0.org2.example.com"
-            ]
+            # Также проверяем остановленные контейнеры
+            result_all = subprocess.run(
+                ["docker", "ps", "-a", "--format", "{{.Names}}|{{.Status}}"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            all_containers = {}
+            for line in result_all.stdout.strip().split('\n'):
+                if '|' in line:
+                    name, status = line.split('|', 1)
+                    all_containers[name.strip()] = status.strip()
             
             for container in required_containers:
                 if container in running_containers:
                     print(f"✓ Контейнер {container} запущен")
                 else:
                     print(f"❌ Контейнер {container} не запущен")
+                    if container in all_containers:
+                        status = all_containers[container]
+                        print(f"   Статус: {status}")
+                        if "Exited" in status:
+                            print(f"   Контейнер остановлен. Проверьте логи: docker logs {container}")
+                    else:
+                        print(f"   Контейнер не найден")
                     print("   Запустите сеть: python network_setup.py start")
                     return False
         except subprocess.CalledProcessError:
@@ -174,33 +258,21 @@ class ChannelSetup:
         channel_tx = self.channel_dir / f"{self.channel_name}.tx"
         channel_block = self.channel_dir / f"{self.channel_name}.block"
         
-        # Проверяем, не существует ли уже канал
+        # Проверяем, не существует ли уже канал локально
         if channel_block.exists():
-            response = input(f"⚠️  Файл {channel_block} уже существует. Пересоздать? (y/n): ")
-            if response.lower() != 'y':
-                print("Пропущено создание канала")
-                return True
+            print(f"✓ Блок канала уже существует: {channel_block}")
+            print("   Пропущено создание канала (используется существующий блок)")
+            return True
         
-        # Получаем пути к сертификатам
-        orderer_ca = self.orgs_dir / "ordererOrganizations" / self.orderer["domain"] / "orderers" / self.orderer["host"] / "msp" / "tlscacerts"
-        orderer_ca_files = list(orderer_ca.glob("*.pem"))
-        if not orderer_ca_files:
+        # Проверяем, существует ли канал на orderer (пытаемся получить блок)
+        # Если канал уже существует, используем fetch вместо create
+        peer_container = org_config["peer"]
+        orderer_ca_file = self.find_orderer_ca_cert()
+        if not orderer_ca_file:
             print(f"❌ Не найден CA сертификат orderer")
             return False
-        orderer_ca_file = orderer_ca_files[0]
         
-        # Копируем файлы в контейнер
-        peer_container = org_config["peer"]
-        
-        # Копируем channel tx в контейнер
-        copy_cmd = [
-            "docker", "cp",
-            str(channel_tx.absolute()),
-            f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.tx"
-        ]
-        subprocess.run(copy_cmd, capture_output=True)
-        
-        # Копируем orderer CA в контейнер
+        # Копируем orderer CA в контейнер для проверки
         copy_cmd = [
             "docker", "cp",
             str(orderer_ca_file.absolute()),
@@ -208,24 +280,102 @@ class ChannelSetup:
         ]
         subprocess.run(copy_cmd, capture_output=True)
         
+        # Получаем путь к MSP Admin пользователя
+        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
+        if not admin_msp.exists():
+            print(f"❌ MSP Admin пользователя не найден: {admin_msp}")
+            return False
+        
+        admin_msp_container_path = "/etc/hyperledger/fabric/admin-msp"
+        
+        # Копируем MSP Admin в контейнер
+        copy_cmd = [
+            "docker", "cp",
+            str(admin_msp.absolute()),
+            f"{peer_container}:{admin_msp_container_path}"
+        ]
+        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"❌ Ошибка при копировании Admin MSP: {result.stderr}")
+            return False
+        
+        # Пытаемся получить блок канала (если канал уже существует на orderer)
+        fetch_cmd = [
+            "docker", "exec",
+            "-e", f"CORE_PEER_LOCALMSPID={org_config['msp_id']}",
+            "-e", "CORE_PEER_TLS_ENABLED=true",
+            "-e", f"CORE_PEER_ADDRESS={org_config['peer']}:{org_config['peer_port']}",
+            "-e", f"CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt",
+            "-e", f"CORE_PEER_MSPCONFIGPATH={admin_msp_container_path}",
+            "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
+            peer_container,
+            "peer", "channel", "fetch", "oldest",
+            f"./{self.channel_name}.block",
+            "-o", f"{self.orderer['container']}:{self.orderer['port']}",
+            "--ordererTLSHostnameOverride", self.orderer["host"],
+                "-c", self.channel_name,
+                "--tls",
+                "--cafile", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"  # Полный путь
+        ]
+        fetch_result = subprocess.run(fetch_cmd, capture_output=True, text=True)
+        if fetch_result.returncode == 0:
+            print(f"✓ Канал {self.channel_name} уже существует на orderer, получен блок канала")
+            # Копируем блок обратно на хост
+            copy_cmd = [
+                "docker", "cp",
+                f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.block",
+                str(channel_block.absolute())
+            ]
+            subprocess.run(copy_cmd, capture_output=True)
+            print(f"✓ Блок канала сохранен: {channel_block}")
+            return True
+        
+        # Канал не существует на orderer, создаем новый
+        
+        # Копируем channel tx в контейнер
+        copy_cmd = [
+            "docker", "cp",
+            str(channel_tx.absolute()),
+            f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.tx"
+        ]
+        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"⚠️  Предупреждение при копировании channel tx: {result.stderr}")
+        
+        # Orderer CA уже скопирован выше, продолжаем с созданием канала
+        
+        # Проверяем, что файл скопирован
+        check_cmd = [
+            "docker", "exec",
+            peer_container,
+            "test", "-f", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
+        ]
+        result = subprocess.run(check_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"❌ Файл orderer-ca.pem не найден в контейнере после копирования")
+            return False
+        
         # Команда создания канала
+        # Используем Admin MSP для подписи транзакции
+        # Используем имя контейнера для подключения в Docker сети
+        # но TLS hostname для проверки сертификата
         cmd = [
             "docker", "exec",
             "-e", f"CORE_PEER_LOCALMSPID={org_config['msp_id']}",
             "-e", "CORE_PEER_TLS_ENABLED=true",
             "-e", f"CORE_PEER_ADDRESS={org_config['peer']}:{org_config['peer_port']}",
             "-e", f"CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt",
-            "-e", f"CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp",
+            "-e", f"CORE_PEER_MSPCONFIGPATH={admin_msp_container_path}",  # Используем Admin MSP
             "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
             peer_container,
             "peer", "channel", "create",
-            "-o", f"{self.orderer['host']}:{self.orderer['port']}",
+            "-o", f"{self.orderer['container']}:{self.orderer['port']}",  # Используем имя контейнера
             "-c", self.channel_name,
-            "--ordererTLSHostnameOverride", self.orderer["host"],
+            "--ordererTLSHostnameOverride", self.orderer["host"],  # TLS hostname для проверки сертификата
             "-f", f"./{self.channel_name}.tx",
             "--outputBlock", f"./{self.channel_name}.block",
             "--tls",
-            "--cafile", "./orderer-ca.pem"
+            "--cafile", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"  # Полный путь
         ]
         
         print(f"\n{'='*60}")
@@ -265,6 +415,23 @@ class ChannelSetup:
         
         peer_container = org_config["peer"]
         
+        # Путь к MSP Admin пользователя
+        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
+        if not admin_msp.exists():
+            print(f"❌ MSP Admin пользователя не найден: {admin_msp}")
+            return False
+        
+        # Копируем MSP Admin в контейнер (если еще не скопирован)
+        admin_msp_container_path = "/etc/hyperledger/fabric/admin-msp"
+        copy_cmd = [
+            "docker", "cp",
+            str(admin_msp.absolute()),
+            f"{peer_container}:{admin_msp_container_path}"
+        ]
+        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"⚠️  Предупреждение при копировании Admin MSP (возможно уже существует): {result.stderr}")
+        
         # Копируем блок канала в контейнер
         copy_cmd = [
             "docker", "cp",
@@ -274,13 +441,14 @@ class ChannelSetup:
         subprocess.run(copy_cmd, capture_output=True)
         
         # Команда присоединения к каналу
+        # Используем Admin MSP для прохождения проверки политик
         cmd = [
             "docker", "exec",
             "-e", f"CORE_PEER_LOCALMSPID={org_config['msp_id']}",
             "-e", "CORE_PEER_TLS_ENABLED=true",
             "-e", f"CORE_PEER_ADDRESS={org_config['peer']}:{org_config['peer_port']}",
             "-e", f"CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt",
-            "-e", f"CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp",
+            "-e", f"CORE_PEER_MSPCONFIGPATH={admin_msp_container_path}",  # Используем Admin MSP
             "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
             peer_container,
             "peer", "channel", "join",
@@ -317,13 +485,28 @@ class ChannelSetup:
         
         peer_container = org_config["peer"]
         
-        # Получаем пути к сертификатам
-        orderer_ca = self.orgs_dir / "ordererOrganizations" / self.orderer["domain"] / "orderers" / self.orderer["host"] / "msp" / "tlscacerts"
-        orderer_ca_files = list(orderer_ca.glob("*.pem"))
-        if not orderer_ca_files:
+        # Получаем путь к CA сертификату orderer
+        orderer_ca_file = self.find_orderer_ca_cert()
+        if not orderer_ca_file:
             print(f"❌ Не найден CA сертификат orderer")
             return False
-        orderer_ca_file = orderer_ca_files[0]
+        
+        # Путь к MSP Admin пользователя
+        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
+        if not admin_msp.exists():
+            print(f"❌ MSP Admin пользователя не найден: {admin_msp}")
+            return False
+        
+        # Копируем MSP Admin в контейнер (если еще не скопирован)
+        admin_msp_container_path = "/etc/hyperledger/fabric/admin-msp"
+        copy_cmd = [
+            "docker", "cp",
+            str(admin_msp.absolute()),
+            f"{peer_container}:{admin_msp_container_path}"
+        ]
+        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"⚠️  Предупреждение при копировании Admin MSP (возможно уже существует): {result.stderr}")
         
         # Копируем файлы в контейнер
         copy_cmd = [
@@ -331,32 +514,67 @@ class ChannelSetup:
             str(anchor_tx.absolute()),
             f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{org_config['msp_id']}anchors.tx"
         ]
-        subprocess.run(copy_cmd, capture_output=True)
+        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"⚠️  Предупреждение при копировании anchor tx: {result.stderr}")
         
+        # Копируем orderer CA в рабочую директорию
         copy_cmd = [
             "docker", "cp",
             str(orderer_ca_file.absolute()),
             f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
         ]
-        subprocess.run(copy_cmd, capture_output=True)
+        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"❌ Ошибка при копировании orderer CA: {result.stderr}")
+            return False
+        
+        # Проверяем, что файл скопирован
+        check_cmd = [
+            "docker", "exec",
+            peer_container,
+            "test", "-f", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
+        ]
+        result = subprocess.run(check_cmd, capture_output=True)
+        if result.returncode != 0:
+            print(f"❌ Файл orderer-ca.pem не найден в контейнере после копирования")
+            return False
+        
+        # Также копируем в стандартное место на случай, если команда ищет там
+        copy_cmd2 = [
+            "docker", "exec",
+            peer_container,
+            "mkdir", "-p", "/etc/hyperledger/fabric"
+        ]
+        subprocess.run(copy_cmd2, capture_output=True)
+        
+        copy_cmd3 = [
+            "docker", "exec",
+            peer_container,
+            "cp", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem", "/etc/hyperledger/fabric/orderer-ca.pem"
+        ]
+        subprocess.run(copy_cmd3, capture_output=True)
         
         # Команда обновления anchor peer
+        # Используем Admin MSP для подписи транзакции
+        # Используем имя контейнера для подключения в Docker сети
+        # но TLS hostname для проверки сертификата
         cmd = [
             "docker", "exec",
             "-e", f"CORE_PEER_LOCALMSPID={org_config['msp_id']}",
             "-e", "CORE_PEER_TLS_ENABLED=true",
             "-e", f"CORE_PEER_ADDRESS={org_config['peer']}:{org_config['peer_port']}",
             "-e", f"CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt",
-            "-e", f"CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp",
+            "-e", f"CORE_PEER_MSPCONFIGPATH={admin_msp_container_path}",  # Используем Admin MSP
             "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
             peer_container,
             "peer", "channel", "update",
-            "-o", f"{self.orderer['host']}:{self.orderer['port']}",
-            "--ordererTLSHostnameOverride", self.orderer["host"],
+            "-o", f"{self.orderer['container']}:{self.orderer['port']}",  # Используем имя контейнера
+            "--ordererTLSHostnameOverride", self.orderer["host"],  # TLS hostname для проверки сертификата
             "-c", self.channel_name,
             "-f", f"./{org_config['msp_id']}anchors.tx",
             "--tls",
-            "--cafile", "./orderer-ca.pem"
+            "--cafile", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"  # Полный путь
         ]
         
         print(f"\n{'='*60}")
