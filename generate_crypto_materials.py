@@ -8,6 +8,7 @@ import subprocess
 import os
 import platform
 import sys
+import shutil
 from pathlib import Path
 
 
@@ -149,7 +150,69 @@ class CryptoMaterialGenerator:
             f"Генерация транзакции anchor peer для {org_name}"
         )
     
-    def generate_all(self, channel_name="npa-channel"):
+    def cleanup_old_materials(self):
+        """Очищает старые криптографические материалы и артефакты"""
+        print("\n" + "="*60)
+        print("Очистка старых материалов")
+        print("="*60)
+        
+        # Останавливаем сеть, если она запущена, и очищаем volumes
+        try:
+            print("Проверка запущенных контейнеров...")
+            result = subprocess.run(
+                ["docker", "compose", "ps", "-q"],
+                cwd=self.base_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                print("⚠️  Найдены запущенные контейнеры. Остановка и очистка volumes...")
+                clean_result = subprocess.run(
+                    ["docker", "compose", "down", "-v"],
+                    cwd=self.base_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                if clean_result.returncode == 0:
+                    print("✓ Сеть остановлена и volumes очищены")
+                else:
+                    print(f"⚠️  Предупреждение: {clean_result.stderr}")
+            else:
+                # Даже если контейнеры не запущены, убедимся, что volumes очищены
+                print("Очистка volumes...")
+                subprocess.run(
+                    ["docker", "compose", "down", "-v"],
+                    cwd=self.base_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                print("✓ Volumes очищены")
+        except Exception as e:
+            print(f"⚠️  Не удалось проверить/остановить контейнеры: {e}")
+        
+        # Удаляем старые директории
+        dirs_to_clean = [
+            self.orgs_dir,
+            self.channel_dir
+        ]
+        
+        for directory in dirs_to_clean:
+            if directory.exists():
+                try:
+                    shutil.rmtree(directory)
+                    print(f"✓ Удалено: {directory}")
+                except Exception as e:
+                    print(f"⚠️  Не удалось удалить {directory}: {e}")
+        
+        # Создаем пустые директории заново
+        self.orgs_dir.mkdir(parents=True, exist_ok=True)
+        self.channel_dir.mkdir(parents=True, exist_ok=True)
+        print("✓ Директории подготовлены для новой генерации")
+    
+    def generate_all(self, channel_name="npa-channel", cleanup=True):
         """Генерирует все необходимые артефакты"""
         print("\n" + "="*60)
         print("Генерация криптографических материалов и артефактов канала")
@@ -157,6 +220,10 @@ class CryptoMaterialGenerator:
         print(f"Канал: {channel_name}")
         print(f"Платформа Docker: {self.platform_arch}")
         print()
+        
+        # Очистка старых материалов перед генерацией
+        if cleanup:
+            self.cleanup_old_materials()
         
         # Проверка наличия Docker
         try:
@@ -288,11 +355,16 @@ def main():
         help="Платформа Docker образа (linux/amd64 или linux/arm64). "
              "Если не указано, определяется автоматически"
     )
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Не очищать старые материалы перед генерацией (не рекомендуется)"
+    )
     
     args = parser.parse_args()
     
     generator = CryptoMaterialGenerator(platform_arch=args.platform)
-    generator.generate_all(args.channel)
+    generator.generate_all(args.channel, cleanup=not args.no_cleanup)
 
 
 if __name__ == "__main__":

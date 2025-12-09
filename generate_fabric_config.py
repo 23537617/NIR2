@@ -251,6 +251,10 @@ class FabricConfigGenerator:
                 'TwoOrgsOrdererGenesis': {
                     'Orderer': {
                         'OrdererType': 'etcdraft',
+                        # Адреса orderer для OrdererEndpoints
+                        'Addresses': [
+                            'orderer.example.com:7050'
+                        ],
                         'EtcdRaft': {
                             'Consenters': [
                                 {
@@ -526,11 +530,15 @@ class FabricConfigGenerator:
         lines.append(f"        V2_0: {str(configtx['Application']['Capabilities']['V2_0']).lower()}")
         # Добавляем Orderer секцию в профиль канала для поддержки orderer endpoints
         if 'Orderer' in configtx['Profiles']['TwoOrgsChannel']:
+            orderer_profile = configtx['Profiles']['TwoOrgsChannel']['Orderer']
             lines.append("    Orderer:")
             lines.append("      OrdererType: etcdraft")
+            if 'Addresses' in orderer_profile:
+                lines.append("      Addresses:")
+                for addr in orderer_profile['Addresses']:
+                    lines.append(f"      - {addr}")
             lines.append("      EtcdRaft:")
             lines.append("        Consenters:")
-            orderer_profile = configtx['Profiles']['TwoOrgsChannel']['Orderer']
             for consenter in orderer_profile['EtcdRaft']['Consenters']:
                 lines.append(f"        - Host: {consenter['Host']}")
                 lines.append(f"          Port: {consenter['Port']}")
@@ -650,6 +658,8 @@ class FabricConfigGenerator:
                         'ORDERER_GENERAL_TLS_PRIVATEKEY=/var/hyperledger/orderer/tls/server.key',
                         'ORDERER_GENERAL_TLS_CERTIFICATE=/var/hyperledger/orderer/tls/server.crt',
                         'ORDERER_GENERAL_TLS_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]',
+                        # Не требуем mutual TLS для peer-to-orderer соединений (стандартная конфигурация Fabric)
+                        # Mutual TLS используется только для orderer-to-orderer кластерных соединений
                         'ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE=/var/hyperledger/orderer/tls/server.crt',
                         'ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY=/var/hyperledger/orderer/tls/server.key',
                         'ORDERER_GENERAL_CLUSTER_ROOTCAS=[/var/hyperledger/orderer/tls/ca.crt]',
