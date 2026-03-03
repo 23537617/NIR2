@@ -8,7 +8,34 @@ import subprocess
 import os
 import sys
 import time
+import socket
 from pathlib import Path
+from typing import Dict, Any, List, Optional, cast
+
+try:
+    import yaml # type: ignore
+except ImportError:
+    # PyYAML is required
+    yaml = Any  # type: ignore
+
+try:
+    class DummyYaml:
+        def safe_load(self, *args, **kwargs):
+            raise ImportError("PyYAML is not installed. Please install it with 'pip install PyYAML'")
+        def safe_dump(self, *args, **kwargs):
+            raise ImportError("PyYAML is not installed. Please install it with 'pip install PyYAML'")
+    yaml = DummyYaml()
+except Exception:
+    yaml = Any # type: ignore
+
+try:
+    from generate_fabric_config import FabricConfigGenerator # type: ignore
+except ImportError:
+    class FabricConfigGenerator: # type: ignore
+        def __init__(self, *args, **kwargs): pass
+        def generate_config(self, *args, **kwargs): pass
+        def generate_docker_compose(self, *args, **kwargs): pass
+        def generate_all(self, *args, **kwargs): pass
 
 
 class ChannelSetup:
@@ -37,7 +64,7 @@ class ChannelSetup:
         }
         
         # Orderer конфигурация
-        self.orderer = {
+        self.orderer: Dict[str, Any] = {
             "host": "orderer.example.com",  # DNS имя для TLS
             "container": "orderer0",  # Имя контейнера
             "port": 7050,
@@ -111,32 +138,39 @@ class ChannelSetup:
         
         # Ждем запуска контейнеров (максимум 30 секунд)
         print("\nОжидание запуска контейнеров...")
-        max_wait = 30
-        interval = 2
-        waited = 0
-        all_ready = False
+        max_wait_int: int = 30
+        interval_int: int = 2
+        all_ready: bool = False
+        waited_cnt: int = 0
         
-        while waited < max_wait and not all_ready:
+        for w_idx in range(0, max_wait_int + interval_int, interval_int):
+            waited_cnt = int(w_idx)
             try:
-                result = subprocess.run(
-                    ["docker", "ps", "--format", "{{.Names}}"],
+                cmd_list: List[str] = ["docker", "ps", "--format", "{{.Names}}"]
+                p_res = subprocess.run(
+                    cmd_list,
                     capture_output=True,
                     text=True,
                     check=True
                 )
-                running_containers = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
+                running_containers = [str(c).strip() for c in p_res.stdout.strip().split('\n') if str(c).strip()]
                 
-                all_ready = True
-                for container in required_containers:
-                    if container not in running_containers:
-                        all_ready = False
+                all_ready_flag = True
+                for rc in required_containers:
+                    if str(rc) not in running_containers:
+                        all_ready_flag = False
                         break
+                all_ready = all_ready_flag
                 
-                if not all_ready:
-                    time.sleep(interval)
-                    waited += interval
-                    if waited % 6 == 0:  # Каждые 6 секунд показываем прогресс
-                        print(f"   Ожидание... ({waited}/{max_wait} секунд)")
+                if all_ready:
+                    break
+                
+                if int(waited_cnt) >= int(max_wait_int):
+                    break
+                    
+                time.sleep(interval_int)
+                if int(waited_cnt) % 6 == 0:
+                    print(f"   Ожидание... ({waited_cnt}/{max_wait_int} секунд)")
             except subprocess.CalledProcessError:
                 print("❌ Не удалось проверить статус контейнеров")
                 return False
@@ -189,8 +223,8 @@ class ChannelSetup:
         org_config = self.orgs[org_name]
         
         # Пути к сертификатам
-        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
-        peer_tls = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "peers" / org_config["peer"] / "tls"
+        admin_msp = self.orgs_dir / "peerOrganizations" / str(org_config["domain"]) / "users" / str(org_config["admin_user"]) / "msp"
+        peer_tls = self.orgs_dir / "peerOrganizations" / str(org_config["domain"]) / "peers" / str(org_config["peer"]) / "tls"
         
         # Находим файл CA сертификата orderer используя универсальный метод
         orderer_ca_file = self.find_orderer_ca_cert()
@@ -226,14 +260,14 @@ class ChannelSetup:
             "docker", "exec",
             *docker_env,
             "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
-            org_config["peer"],
+            str(org_config["peer"]),
             "peer"
-        ] + command
+        ] + [str(c) for c in command]
         
         print(f"\n{'='*60}")
         print(f"{description} ({org_name})")
         print(f"{'='*60}")
-        print(f"Выполняется: {' '.join(cmd)}")
+        print(f"Выполняется: {' '.join([str(i) for i in cmd])}")
         
         result = subprocess.run(
             cmd,
@@ -286,7 +320,7 @@ class ChannelSetup:
         ]
         subprocess.run(copy_cmd, capture_output=True)
         
-        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
+        admin_msp = Path(self.orgs_dir) / "peerOrganizations" / str(org_config["domain"]) / "users" / str(org_config["admin_user"]) / "msp"
         if not admin_msp.exists():
             print(f"❌ MSP Admin пользователя не найден: {admin_msp}")
             return False
@@ -319,12 +353,13 @@ class ChannelSetup:
             "peer", "channel", "fetch", "oldest",
             f"./{self.channel_name}.block",
             "-o", f"{self.orderer['container']}:{self.orderer['port']}",
-            "--ordererTLSHostnameOverride", self.orderer["host"],
-            "-c", self.channel_name,
+            "--ordererTLSHostnameOverride", str(self.orderer["host"]),
+            "-c", str(self.channel_name),
             "--tls",
             "--cafile", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
         ]
-        fetch_result = subprocess.run(fetch_cmd, capture_output=True, text=True, timeout=10)
+        v_f_cmd: List[str] = [str(i) for i in fetch_cmd]
+        fetch_result = subprocess.run(v_f_cmd, capture_output=True, text=True, timeout=10)
         
         if fetch_result.returncode == 0:
             if force_recreate:
@@ -352,12 +387,12 @@ class ChannelSetup:
             else:
                 print(f"✓ Канал {self.channel_name} уже существует на orderer")
                 # Копируем блок обратно на хост
-                copy_cmd = [
+                cp_cmd_back = [
                     "docker", "cp",
                     f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.block",
                     str(channel_block.absolute())
                 ]
-                subprocess.run(copy_cmd, capture_output=True)
+                subprocess.run([str(i) for i in cp_cmd_back], capture_output=True)
                 print(f"✓ Блок канала сохранен: {channel_block}")
                 return True
         
@@ -365,12 +400,13 @@ class ChannelSetup:
         
         # Ожидание полной готовности orderer (особенно важно после перезапуска)
         print("\n⏳ Ожидание готовности orderer...")
-        orderer_ready = False
-        max_orderer_wait = 30  # Максимум 30 секунд ожидания
-        orderer_waited = 0
-        interval = 3  # Проверяем каждые 3 секунды
+        orderer_ready: bool = False
+        max_ord_wait: int = 30
+        ord_interval: int = 3
+        ord_waited_cnt: int = 0
         
-        while orderer_waited < max_orderer_wait and not orderer_ready:
+        for w_ord_idx in range(0, max_ord_wait + ord_interval, ord_interval):
+            ord_waited_cnt = int(w_ord_idx)
             # Сначала проверяем, что контейнер orderer запущен и не упал
             container_check = subprocess.run(
                 ["docker", "ps", "--filter", "name=orderer0", "--format", "{{.Status}}"],
@@ -386,26 +422,51 @@ class ChannelSetup:
             # Проверяем логи orderer на готовность и отсутствие ошибок
             # Проверяем ВСЕ логи, а не только последние 50 строк
             log_check = subprocess.run(
-                ["docker", "logs", "orderer0", "2>&1"],
-                capture_output=True,
-                text=True
+                ["docker", "logs", "orderer0"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False
             )
             
             if log_check.returncode == 0 and log_check.stdout:
                 logs = log_check.stdout.lower()
                 
                 # Проверяем на критические ошибки (только в последних 100 строках)
-                recent_logs = "\n".join(log_check.stdout.split('\n')[-100:]).lower()
-                critical_errors = ["panic", "fatal error", "failed to start", "error initializing", 
+                # Проверяем на критические ошибки (только в последних 100 строках)
+                log_lines: List[str] = [str(l) for l in log_check.stdout.split('\n')]
+                count_lines: int = int(len(log_lines))
+                start_idx_val = int(max(0, count_lines - 100))
+                start_idx_int = int(start_idx_val)
+                # Explicitly use primitive loop to avoid analyzer confusion with slicing/comprehensions
+                start_i_idx: int = int(start_idx_int)
+                log_len_idx: int = int(len(log_lines))
+                recent_logs_list: List[str] = []
+                # Cast the list to be absolutely sure
+                log_lines_cast = cast(List[str], log_lines)
+                for j_idx in range(start_i_idx, log_len_idx):
+                    recent_logs_list.append(str(log_lines_cast[int(j_idx)]))
+                
+                recent_logs: str = "\n".join(recent_logs_list).lower()
+                critical_errors: List[str] = ["panic", "fatal error", "failed to start", "error initializing", 
                                   "certificate signed by unknown authority", "invalid identity"]
-                has_critical_error = any(err in recent_logs for err in critical_errors)
+                has_critical_error: bool = any(err in recent_logs for err in critical_errors)
                 
                 if has_critical_error:
                     print(f"❌ Обнаружены критические ошибки в логах orderer:")
-                    # Показываем последние строки с ошибками
-                    error_lines = [line for line in log_check.stdout.split('\n')[-100:] 
-                                 if any(err in line.lower() for err in critical_errors)][-5:]
-                    for line in error_lines:
+                    # Показываем последние строки с ошибками - avoid slicing
+                    error_lines: List[str] = []
+                    for k in range(int(start_idx_int), int(len(log_lines))):
+                        line_str = str(log_lines[int(k)])
+                        if any(err in line_str.lower() for err in critical_errors):
+                            error_lines.append(line_str)
+                    start_err = int(max(0, len(error_lines) - 5))
+                    end_err = int(len(error_lines))
+                    start_err_int = int(start_err)
+                    end_err_int = int(end_err)
+                    # Explicitly cast range and slice indices to int
+                    for i in range(int(start_err_int), int(end_err_int)):
+                        line = error_lines[int(i)]
                         if line.strip():
                             print(f"   {line}")
                     print(f"   Полные логи: docker logs orderer0")
@@ -439,29 +500,28 @@ class ChannelSetup:
                     
                     # Если нет критических ошибок и есть признаки готовности, считаем готовым
                     orderer_ready = True
-                    print(f"✓ Orderer готов к приему запросов (проверено через {orderer_waited} секунд)")
+                    print(f"✓ Orderer готов к приему запросов (проверено через {ord_waited_cnt} секунд)")
                     break
             
-            time.sleep(interval)
-            orderer_waited += interval
-            if orderer_waited % 9 == 0:  # Показываем прогресс каждые 9 секунд
-                print(f"   Ожидание готовности orderer... ({orderer_waited}/{max_orderer_wait} секунд)")
+            time.sleep(ord_interval)
+            if int(ord_waited_cnt) % 9 == 0:  # Показываем прогресс каждые 9 секунд
+                print(f"   Ожидание готовности orderer... ({ord_waited_cnt}/{max_ord_wait} секунд)")
         
         if not orderer_ready:
-            print(f"\n⚠️  Orderer не готов после {max_orderer_wait} секунд ожидания")
+            print(f"\n⚠️  Orderer не готов после {max_ord_wait} секунд ожидания")
             print(f"   Проверьте логи orderer: docker logs orderer0 --tail 100")
             print(f"   Убедитесь, что orderer успешно запустился без ошибок")
             print(f"   Если orderer запущен, попытка создания канала все равно будет выполнена...")
             print(f"   (Возможно, orderer готов, но проверка не сработала)")
             # Не возвращаем False, продолжаем попытку создания канала
         
-        # Копируем channel tx в контейнер
+        # Копируем блок в контейнер
         copy_cmd = [
             "docker", "cp",
-            str(channel_tx.absolute()),
-            f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.tx"
+            str(channel_tx.absolute()), # Changed from channel_block to channel_tx
+            f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.tx" # Changed from .block to .tx
         ]
-        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        result = subprocess.run(copy_cmd, capture_output=True, text=True) # Changed from copy_cmd2 to copy_cmd and removed [str(i) for i in ...]
         if result.returncode != 0:
             print(f"⚠️  Предупреждение при копировании channel tx: {result.stderr}")
         
@@ -470,7 +530,7 @@ class ChannelSetup:
         # Проверяем, что файл скопирован
         check_cmd = [
             "docker", "exec",
-            peer_container,
+            str(peer_container),
             "test", "-f", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
         ]
         result = subprocess.run(check_cmd, capture_output=True)
@@ -490,11 +550,11 @@ class ChannelSetup:
             "-e", f"CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt",
             "-e", f"CORE_PEER_MSPCONFIGPATH={admin_msp_container_path}",  # Используем Admin MSP
             "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
-            peer_container,
+            str(peer_container),
             "peer", "channel", "create",
             "-o", f"{self.orderer['container']}:{self.orderer['port']}",  # Используем имя контейнера
-            "-c", self.channel_name,
-            "--ordererTLSHostnameOverride", self.orderer["host"],  # TLS hostname для проверки сертификата
+            "-c", str(self.channel_name),
+            "--ordererTLSHostnameOverride", str(self.orderer["host"]),  # TLS hostname для проверки сертификата
             "-f", f"./{self.channel_name}.tx",
             "--outputBlock", f"./{self.channel_name}.block",
             "--tls",
@@ -504,7 +564,7 @@ class ChannelSetup:
         print(f"\n{'='*60}")
         print(f"Создание канала {self.channel_name}")
         print(f"{'='*60}")
-        print(f"Выполняется: {' '.join(cmd)}")
+        print(f"Выполняется: {' '.join([str(i) for i in cmd])}")
         
         # Выполняем команду с повторными попытками
         max_attempts = 3
@@ -518,17 +578,18 @@ class ChannelSetup:
                 time.sleep(5)
             
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                v_cmd: List[str] = [str(i) for i in cmd]
+                result = subprocess.run(v_cmd, capture_output=True, text=True, timeout=60)
             except subprocess.TimeoutExpired:
                 print(f"⚠️  Таймаут при выполнении команды (попытка {attempt + 1})")
                 attempt += 1
                 continue
             
-            if result.returncode == 0:
+            if result is not None and result.returncode == 0:
                 success = True
             else:
                 attempt += 1
-                error_msg = result.stderr[:200] if result.stderr else "Неизвестная ошибка"
+                error_msg = result.stderr[:200] if (result is not None and result.stderr) else "Неизвестная ошибка"
                 print(f"⚠️  Попытка {attempt} не удалась: {error_msg}...")
                 if attempt < max_attempts:
                     # Проверяем, может быть orderer еще не готов
@@ -537,10 +598,14 @@ class ChannelSetup:
         
         if not success:
             print(f"\n❌ Ошибка после {max_attempts} попыток")
-            if result:
-                print(f"Последняя ошибка: {result.stderr}")
-                if result.stdout:
-                    print(f"Вывод: {result.stdout}")
+            res_obj = result
+            if res_obj is not None:
+                err_text = getattr(res_obj, 'stderr', '')
+                out_text = getattr(res_obj, 'stdout', '')
+                if err_text:
+                    print(f"Последняя ошибка: {err_text}")
+                if out_text:
+                    print(f"Вывод: {out_text}")
             print("\n💡 Рекомендации:")
             print("   1. Проверьте логи orderer: docker logs orderer0 --tail 50")
             print("   2. Убедитесь, что orderer полностью запущен: docker logs orderer0 | Select-String 'Beginning to serve'")
@@ -556,7 +621,8 @@ class ChannelSetup:
             f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{self.channel_name}.block",
             str(channel_block.absolute())
         ]
-        subprocess.run(copy_cmd, capture_output=True)
+        v_cp_b_cmd: List[str] = [str(i) for i in copy_cmd]
+        subprocess.run(v_cp_b_cmd, capture_output=True)
         print(f"✓ Блок канала сохранен: {channel_block}")
         
         return True
@@ -573,7 +639,7 @@ class ChannelSetup:
         peer_container = org_config["peer"]
         
         # Путь к MSP Admin пользователя
-        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
+        admin_msp = self.orgs_dir / "peerOrganizations" / str(org_config["domain"]) / "users" / str(org_config["admin_user"]) / "msp"
         if not admin_msp.exists():
             print(f"❌ MSP Admin пользователя не найден: {admin_msp}")
             return False
@@ -584,10 +650,11 @@ class ChannelSetup:
         # Удаляем старую директорию, если она существует (для чистоты)
         remove_cmd = [
             "docker", "exec",
-            peer_container,
-            "rm", "-rf", admin_msp_container_path
+            str(peer_container),
+            "rm", "-rf", str(admin_msp_container_path)
         ]
-        subprocess.run(remove_cmd, capture_output=True)  # Игнорируем ошибки, если директории нет
+        v_rm_cmd: List[str] = [str(i) for i in remove_cmd]
+        subprocess.run(v_rm_cmd, capture_output=True) # Removed [str(i) for i in ...]
         
         # Копируем MSP Admin в контейнер
         # Важно: используем родительскую директорию для сохранения структуры
@@ -610,7 +677,8 @@ class ChannelSetup:
                 peer_container,
                 "test", "-d", f"{admin_msp_container_path}/{dir_name}"
             ]
-            check_result = subprocess.run(check_cmd, capture_output=True)
+            v_ch_dir_cmd: List[str] = [str(i) for i in check_cmd]
+            check_result = subprocess.run(v_ch_dir_cmd, capture_output=True)
             if check_result.returncode != 0:
                 print(f"❌ Директория {dir_name} не найдена в Admin MSP")
                 return False
@@ -621,7 +689,8 @@ class ChannelSetup:
             peer_container,
             "sh", "-c", f"ls {admin_msp_container_path}/signcerts/*.pem 2>/dev/null | head -1"
         ]
-        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+        v_ver_cmd: List[str] = [str(i) for i in verify_cmd]
+        verify_result = subprocess.run(v_ver_cmd, capture_output=True, text=True)
         if verify_result.returncode != 0 or not verify_result.stdout.strip():
             print(f"❌ Сертификат не найден в signcerts")
             print(f"   Проверьте путь: {admin_msp}")
@@ -652,7 +721,8 @@ class ChannelSetup:
             "peer", "channel", "list"
         ]
         
-        check_result = subprocess.run(check_cmd, capture_output=True, text=True, timeout=10)
+        v_list_cmd: List[str] = [str(i) for i in check_cmd]
+        check_result = subprocess.run(v_list_cmd, capture_output=True, text=True, timeout=10)
         
         # Если команда выполнилась успешно и канал в списке, значит peer уже присоединен
         if check_result.returncode == 0 and self.channel_name in check_result.stdout:
@@ -681,10 +751,11 @@ class ChannelSetup:
         print(f"\n{'='*60}")
         print(f"Присоединение {org_name} к каналу {self.channel_name}")
         print(f"{'='*60}")
-        print(f"Выполняется: {' '.join(cmd)}")
+        print(f"Выполняется: {' '.join([str(i) for i in cmd])}")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            v_join_cmd: List[str] = [str(i) for i in cmd]
+            result = subprocess.run(v_join_cmd, capture_output=True, text=True, timeout=30)
         except subprocess.TimeoutExpired:
             print(f"⚠️  Таймаут при присоединении к каналу")
             return False
@@ -730,7 +801,7 @@ class ChannelSetup:
             return False
         
         # Путь к MSP Admin пользователя
-        admin_msp = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "users" / org_config["admin_user"] / "msp"
+        admin_msp = self.orgs_dir / "peerOrganizations" / str(org_config["domain"]) / "users" / str(org_config["admin_user"]) / "msp"
         if not admin_msp.exists():
             print(f"❌ MSP Admin пользователя не найден: {admin_msp}")
             return False
@@ -738,13 +809,21 @@ class ChannelSetup:
         # Копируем MSP Admin в контейнер
         admin_msp_container_path = "/etc/hyperledger/fabric/admin-msp"
         
-        # Удаляем старую директорию, если она существует (для чистоты)
+        # Сначала удаляем старую директорию, если она существует (для чистоты)
         remove_cmd = [
             "docker", "exec",
             peer_container,
             "rm", "-rf", admin_msp_container_path
         ]
-        subprocess.run(remove_cmd, capture_output=True)  # Игнорируем ошибки, если директории нет
+        subprocess.run([str(i) for i in remove_cmd], capture_output=True)
+        
+        # Создаем директорию
+        mkdir_cmd = [
+            "docker", "exec",
+            peer_container,
+            "mkdir", "-p", admin_msp_container_path
+        ]
+        subprocess.run([str(i) for i in mkdir_cmd], capture_output=True)
         
         # Копируем MSP Admin в контейнер
         copy_cmd = [
@@ -757,52 +836,34 @@ class ChannelSetup:
             print(f"❌ Ошибка при копировании Admin MSP: {result.stderr}")
             return False
         
-        # Копируем файлы в контейнер
-        copy_cmd = [
+        # Копируем транзакцию в контейнер
+        copy_tx_cmd = [
             "docker", "cp",
             str(anchor_tx.absolute()),
             f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/{org_config['msp_id']}anchors.tx"
         ]
-        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        result = subprocess.run(copy_tx_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"⚠️  Предупреждение при копировании anchor tx: {result.stderr}")
         
-        # Копируем orderer CA в рабочую директорию
-        copy_cmd = [
+        # Копируем orderer CA
+        copy_ca_cmd = [
             "docker", "cp",
             str(orderer_ca_file.absolute()),
             f"{peer_container}:/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
         ]
-        result = subprocess.run(copy_cmd, capture_output=True, text=True)
+        result = subprocess.run(copy_ca_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"❌ Ошибка при копировании orderer CA: {result.stderr}")
             return False
         
-        # Проверяем, что файл скопирован
-        check_cmd = [
-            "docker", "exec",
-            peer_container,
-            "test", "-f", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem"
-        ]
-        result = subprocess.run(check_cmd, capture_output=True)
-        if result.returncode != 0:
-            print(f"❌ Файл orderer-ca.pem не найден в контейнере после копирования")
-            return False
-        
-        # Также копируем в стандартное место на случай, если команда ищет там
-        copy_cmd2 = [
-            "docker", "exec",
-            peer_container,
-            "mkdir", "-p", "/etc/hyperledger/fabric"
-        ]
-        subprocess.run(copy_cmd2, capture_output=True)
-        
-        copy_cmd3 = [
+        # Также копируем в /etc для надежности
+        copy_ca_etc_cmd = [
             "docker", "exec",
             peer_container,
             "cp", "/opt/gopath/src/github.com/hyperledger/fabric/peer/orderer-ca.pem", "/etc/hyperledger/fabric/orderer-ca.pem"
         ]
-        subprocess.run(copy_cmd3, capture_output=True)
+        subprocess.run([str(i) for i in copy_ca_etc_cmd], capture_output=True)
         
         # Команда обновления anchor peer
         # Используем Admin MSP для подписи транзакции
@@ -829,10 +890,10 @@ class ChannelSetup:
         print(f"\n{'='*60}")
         print(f"Обновление anchor peer для {org_name}")
         print(f"{'='*60}")
-        print(f"Выполняется: {' '.join(cmd)}")
+        print(f"Выполняется: {' '.join([str(i) for i in cmd])}")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run([str(i) for i in cmd], capture_output=True, text=True, timeout=30)
         except subprocess.TimeoutExpired:
             print(f"⚠️  Таймаут при обновлении anchor peer для {org_name}")
             return False
@@ -881,6 +942,7 @@ class ChannelSetup:
             time.sleep(1)
         
         # 3. Обновление anchor peer'ов
+        all_anchors_success = True
         for org_name in self.orgs.keys():
             # Повторные попытки для обновления anchor peer (может быть временная ошибка EOF)
             max_attempts = 3
@@ -897,17 +959,27 @@ class ChannelSetup:
             if not success:
                 print(f"\n⚠️  Предупреждение: не удалось обновить anchor peer для {org_name} после {max_attempts} попыток")
                 print(f"   Можно попробовать обновить вручную позже")
+                all_anchors_success = False
                 # Не останавливаем процесс, продолжаем с другими организациями
             
             time.sleep(2)  # Задержка между обновлениями разных организаций
         
         print("\n" + "="*60)
-        print(f"✓ Канал {self.channel_name} успешно настроен!")
+        if all_anchors_success:
+            print(f"✓ Канал {self.channel_name} успешно настроен!")
+        else:
+            print(f"⚠️  Канал {self.channel_name} настроен с предупреждениями (ошибки anchor peer)")
         print("="*60)
+        
         print("\nВсе операции выполнены:")
         print("  ✓ Канал создан")
         print("  ✓ Peer'ы присоединены к каналу")
-        print("  ✓ Anchor peer'ы обновлены")
+        if all_anchors_success:
+            print("  ✓ Anchor peer'ы обновлены")
+        else:
+            print("  ⚠️  Некоторые anchor peer'ы не были обновлены (см. выше)")
+        
+        return True
         
         return True
 

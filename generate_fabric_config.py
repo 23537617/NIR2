@@ -5,7 +5,13 @@
 """
 
 import os
-import yaml
+import sys
+try:
+    import yaml # type: ignore
+except ImportError:
+    print("❌ Ошибка: пакет 'PyYAML' не установлен.")
+    print("   Установите его командой: pip install PyYAML")
+    sys.exit(1)
 from pathlib import Path
 
 
@@ -82,6 +88,9 @@ class FabricConfigGenerator:
                     'Name': 'OrdererOrg',
                     'ID': 'OrdererMSP',
                     'MSPDir': '../organizations/ordererOrganizations/example.com/msp',
+                    'OrdererEndpoints': [
+                        'orderer.example.com:7050'
+                    ],
                     'Policies': {
                         'Readers': {
                             'Type': 'Signature',
@@ -113,6 +122,10 @@ class FabricConfigGenerator:
                         'Admins': {
                             'Type': 'Signature',
                             'Rule': "OR('Org1MSP.admin')"
+                        },
+                        'Endorsement': {
+                            'Type': 'Signature',
+                            'Rule': "OR('Org1MSP.peer')"
                         }
                     },
                     'AnchorPeers': [
@@ -138,6 +151,10 @@ class FabricConfigGenerator:
                         'Admins': {
                             'Type': 'Signature',
                             'Rule': "OR('Org2MSP.admin')"
+                        },
+                        'Endorsement': {
+                            'Type': 'Signature',
+                            'Rule': "OR('Org2MSP.peer')"
                         }
                     },
                     'AnchorPeers': [
@@ -386,7 +403,7 @@ class FabricConfigGenerator:
     
     def _write_configtx_with_anchors(self, config_path, configtx):
         """Записывает configtx.yaml с правильными YAML anchors и aliases"""
-        lines = []
+        lines: list[str] = []
         
         # Organizations с anchors
         lines.append("Organizations:")
@@ -412,6 +429,11 @@ class FabricConfigGenerator:
                 for anchor_peer in org['AnchorPeers']:
                     lines.append(f"  - Host: {anchor_peer['Host']}")
                     lines.append(f"    Port: {anchor_peer['Port']}")
+            
+            if 'OrdererEndpoints' in org:
+                lines.append("  OrdererEndpoints:")
+                for addr in org['OrdererEndpoints']:
+                    lines.append(f"  - {addr}")
         
         lines.append("")
         
@@ -684,9 +706,13 @@ class FabricConfigGenerator:
                     'depends_on': [
                         'ca_orderer'
                     ],
-                    'networks': [
-                        'fabric-network'
-                    ]
+                    'networks': {
+                        'fabric-network': {
+                            'aliases': [
+                                'orderer.example.com'
+                            ]
+                        }
+                    }
                 },
                 'peer0.org1.example.com': {
                     'container_name': 'peer0.org1.example.com',
@@ -741,9 +767,13 @@ class FabricConfigGenerator:
                         'ca_org1',
                         'couchdb0'
                     ],
-                    'networks': [
-                        'fabric-network'
-                    ]
+                    'networks': {
+                        'fabric-network': {
+                            'aliases': [
+                                'peer0.org1.example.com'
+                            ]
+                        }
+                    }
                 },
                 'couchdb0': {
                     'container_name': 'couchdb0',
@@ -812,9 +842,13 @@ class FabricConfigGenerator:
                         'ca_org2',
                         'couchdb1'
                     ],
-                    'networks': [
-                        'fabric-network'
-                    ]
+                    'networks': {
+                        'fabric-network': {
+                            'aliases': [
+                                'peer0.org2.example.com'
+                            ]
+                        }
+                    }
                 },
                 'couchdb1': {
                     'container_name': 'couchdb1',

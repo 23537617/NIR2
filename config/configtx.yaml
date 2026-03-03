@@ -13,6 +13,8 @@ Organizations:
     Admins:
       Type: Signature
       Rule: OR('OrdererMSP.admin')
+  OrdererEndpoints:
+  - orderer.example.com:7050
 - &Org1MSP
   Name: Org1MSP
   ID: Org1MSP
@@ -27,6 +29,9 @@ Organizations:
     Admins:
       Type: Signature
       Rule: OR('Org1MSP.admin')
+    Endorsement:
+      Type: Signature
+      Rule: OR('Org1MSP.peer')
   AnchorPeers:
   - Host: peer0.org1.example.com
     Port: 7051
@@ -44,6 +49,9 @@ Organizations:
     Admins:
       Type: Signature
       Rule: OR('Org2MSP.admin')
+    Endorsement:
+      Type: Signature
+      Rule: OR('Org2MSP.peer')
   AnchorPeers:
   - Host: peer0.org2.example.com
     Port: 9051

@@ -10,6 +10,14 @@ import platform
 import sys
 import shutil
 from pathlib import Path
+try:
+    from generate_fabric_config import FabricConfigGenerator # type: ignore
+except ImportError:
+    class FabricConfigGenerator: # type: ignore
+        def __init__(self, *args, **kwargs): pass
+        def generate_config(self, *args, **kwargs): pass
+        def generate_docker_compose(self, *args, **kwargs): pass
+        def generate_all(self, *args, **kwargs): pass
 
 
 class CryptoMaterialGenerator:
@@ -51,26 +59,35 @@ class CryptoMaterialGenerator:
         
         return detected
         
-    def run_docker_command(self, cmd, description):
+    def run_docker_command(self, cmd, description, timeout=300):
         """Выполняет команду через Docker"""
         print(f"\n{'='*60}")
         print(f"{description}")
         print(f"{'='*60}")
         print(f"Выполняется: {' '.join(cmd)}")
         
-        result = subprocess.run(
-            cmd,
-            cwd=self.base_dir,
-            capture_output=True,
-            text=True
-        )
-        
-        if result.returncode != 0:
-            print(f"❌ Ошибка: {result.stderr}")
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self.base_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            
+            if result.returncode != 0:
+                print(f"❌ Ошибка: {result.stderr}")
+                return False
+            else:
+                print(f"✓ Успешно: {result.stdout}")
+                return True
+        except subprocess.TimeoutExpired:
+            print(f"❌ Ошибка: Превышено время ожидания ({timeout}с) для команды Docker.")
+            print("   Это обычно означает, что Docker завис или работает слишком медленно.")
             return False
-        else:
-            print(f"✓ Успешно: {result.stdout}")
-            return True
+        except Exception as e:
+            print(f"❌ Произошла ошибка при выполнении команды: {e}")
+            return False
     
     def generate_crypto_materials(self):
         """Генерирует криптографические материалы используя Docker"""
@@ -187,9 +204,11 @@ class CryptoMaterialGenerator:
                     cwd=self.base_dir,
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=20
                 )
                 print("✓ Volumes очищены")
+        except subprocess.TimeoutExpired:
+            print("⚠️  Таймаут при очистке Docker. Пропускаем этот шаг...")
         except Exception as e:
             print(f"⚠️  Не удалось проверить/остановить контейнеры: {e}")
         
@@ -242,9 +261,16 @@ class CryptoMaterialGenerator:
                     ["docker", "ps"],
                     capture_output=True,
                     check=True,
-                    timeout=5
+                    timeout=10
                 )
-            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            except subprocess.TimeoutExpired:
+                print("❌ Ошибка: Docker daemon не отвечает (таймаут 10с).")
+                print("\n📋 Решение:")
+                print("   1. Docker Desktop на Windows завис.")
+                print("   2. Перезагрузите Docker Desktop (Restart в трее).")
+                print("   3. Если не помогает — убейте процессы Docker в Диспетчере задач и запустите снова.")
+                return False
+            except subprocess.CalledProcessError:
                 print("⚠️  Docker установлен, но Docker daemon не запущен.")
                 print("\n📋 Решение:")
                 print("   1. Запустите Docker Desktop на Windows")
@@ -276,15 +302,10 @@ class CryptoMaterialGenerator:
             return False
         
         # Проверка наличия конфигурационных файлов
-        if not (self.config_dir / "crypto-config.yaml").exists():
-            print("❌ Файл config/crypto-config.yaml не найден.")
-            print("   Сначала запустите: python generate_fabric_config.py")
-            return False
-        
-        if not (self.config_dir / "configtx.yaml").exists():
-            print("❌ Файл config/configtx.yaml не найден.")
-            print("   Сначала запустите: python generate_fabric_config.py")
-            return False
+        # Генерируем их заново, чтобы применить все исправления!
+        print("\nОбновление конфигурационных файлов (crypto-config.yaml, configtx.yaml, docker-compose.yaml)...")
+        generator = FabricConfigGenerator(base_dir=self.base_dir)
+        generator.generate_all()
         
         success = True
         

@@ -58,7 +58,7 @@ class ChaincodeDeployer:
         }
         
         # Package ID после установки
-        self.package_id = None
+        self.package_id = ""  # Используем пустую строку для типа str
     
     def find_orderer_ca_cert(self):
         """Находит CA сертификат orderer"""
@@ -97,13 +97,37 @@ class ChaincodeDeployer:
             return False
         
         peer_container = org_config["peer"]
+        admin_msp_container_path = "/etc/hyperledger/fabric/admin-msp"
+        
+        # Удаляем старую директорию, если она существует (для чистоты)
+        remove_cmd = ["docker", "exec", str(peer_container), "rm", "-rf", str(admin_msp_container_path)]
+        subprocess.run([str(v) for v in remove_cmd], capture_output=True)
+        
+        # Копируем MSP Admin в контейнер
+        # Используем родительскую директорию для сохранения структуры
         copy_cmd = [
             "docker", "cp",
-            str(admin_msp.absolute()),
-            f"{peer_container}:/etc/hyperledger/fabric/admin-msp"
+            str(admin_msp.absolute()) + "/.",
+            f"{peer_container}:{admin_msp_container_path}"
         ]
-        result = subprocess.run(copy_cmd, capture_output=True, text=True)
-        return result.returncode == 0
+        result = subprocess.run([str(v) for v in copy_cmd], capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"❌ Ошибка копирования MSP: {result.stderr}")
+            return False
+            
+        # Для работы NodeOUs нужно, чтобы в MSP была директория config.yaml
+        # Копируем config.yaml из основного MSP организации, если его нет у пользователя
+        if not (admin_msp / "config.yaml").exists():
+            org_msp_config = self.orgs_dir / "peerOrganizations" / org_config["domain"] / "msp" / "config.yaml"
+            if org_msp_config.exists():
+                copy_config_cmd = [
+                    "docker", "cp",
+                    str(org_msp_config.absolute()),
+                    f"{peer_container}:{admin_msp_container_path}/config.yaml"
+                ]
+                subprocess.run([str(v) for v in copy_config_cmd], capture_output=True)
+                
+        return True
     
     def copy_orderer_ca(self, org_name):
         """Копирует orderer CA сертификат в контейнер peer"""
@@ -151,6 +175,7 @@ class ChaincodeDeployer:
             "-e", f"CORE_PEER_ADDRESS={org_config['peer']}:{org_config['peer_port']}",
             "-e", "CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt",
             "-e", "CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/admin-msp",
+            "-e", "FABRIC_LOGGING_SPEC=DEBUG", # Временная диагностика
             "-w", "/opt/gopath/src/github.com/hyperledger/fabric/peer",
             peer_container,
             "peer"
@@ -159,9 +184,9 @@ class ChaincodeDeployer:
         print(f"\n{'='*60}")
         print(f"{description} ({org_name})")
         print(f"{'='*60}")
-        print(f"Выполняется: {' '.join(cmd)}")
+        print(f"Выполняется: {' '.join([str(i) for i in cmd])}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run([str(i) for i in cmd], capture_output=True, text=True)
         
         if result.returncode != 0:
             print(f"❌ Ошибка: {result.stderr}")
@@ -279,8 +304,8 @@ class ChaincodeDeployer:
         
         # Находим общий package-id, который есть у обеих организаций
         if len(package_ids) == 2:
-            org1_id = package_ids.get("Org1")
-            org2_id = package_ids.get("Org2")
+            org1_id = str(package_ids["Org1"])
+            org2_id = str(package_ids["Org2"])
             
             # Если package-id одинаковые
             if org1_id == org2_id:
@@ -321,10 +346,10 @@ class ChaincodeDeployer:
                     print(f"✓ Найден общий package-id: {self.package_id}")
                 else:
                     # Если общего нет, используем последний от Org1
-                    self.package_id = org1_id
+                    self.package_id = str(org1_id)
                     print(f"⚠️  Общего package-id не найдено, используем от Org1: {self.package_id}")
         elif len(package_ids) == 1:
-            self.package_id = list(package_ids.values())[0]
+            self.package_id = str(list(package_ids.values())[0])
             print(f"\n✓ Используется package-id: {self.package_id} (только одна организация)")
         else:
             print("❌ Не удалось получить package-id ни от одной организации")
@@ -334,7 +359,7 @@ class ChaincodeDeployer:
     
     def _parse_package_id(self, output):
         """Парсит package-id из вывода queryinstalled (берет последний)"""
-        package_ids = []
+        package_ids: list = []
         for line in output.split('\n'):
             if self.chaincode_label in line and 'Package ID:' in line:
                 # Ищем "Package ID:" или просто ID после метки
@@ -349,7 +374,7 @@ class ChaincodeDeployer:
                             package_ids.append(parts[i + 1].strip().rstrip(','))
         
         # Возвращаем последний package-id (самый свежий)
-        return package_ids[-1] if package_ids else None
+        return package_ids[-1] if package_ids else ""
     
     def approve_chaincode(self):
         """Одобряет chaincode от каждой организации"""
@@ -427,7 +452,7 @@ class ChaincodeDeployer:
                 f"Проверка локального одобрения для {org_name}"
             )
             if result and output:
-                if self.package_id in output or self.chaincode_name in output:
+                if (self.package_id and self.package_id in output) or self.chaincode_name in output:
                     local_approvals[org_name] = True
                     print(f"✓ {org_name}: локальное одобрение найдено")
                 else:

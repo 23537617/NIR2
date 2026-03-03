@@ -87,7 +87,9 @@ services:
     depends_on:
     - ca_orderer
     networks:
-    - fabric-network
+      fabric-network:
+        aliases:
+        - orderer.example.com
   peer0.org1.example.com:
     container_name: peer0.org1.example.com
     image: hyperledger/fabric-peer:2.5
@@ -138,7 +140,9 @@ services:
     - ca_org1
     - couchdb0
     networks:
-    - fabric-network
+      fabric-network:
+        aliases:
+        - peer0.org1.example.com
   couchdb0:
     container_name: couchdb0
     image: couchdb:3.2
@@ -199,7 +203,9 @@ services:
     - ca_org2
     - couchdb1
     networks:
-    - fabric-network
+      fabric-network:
+        aliases:
+        - peer0.org2.example.com
   couchdb1:
     container_name: couchdb1
     image: couchdb:3.2
