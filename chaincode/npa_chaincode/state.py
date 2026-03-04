@@ -223,3 +223,65 @@ class StateManager:
             logger.error(f"Ошибка при получении истории для ключа {key}: {str(e)}")
             return []
 
+    def get_query_result(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Выполнить rich query (CouchDB)
+        
+        Args:
+            query: Строка запроса в формате CouchDB selector
+        
+        Returns:
+            Список словарей с результатами
+        """
+        try:
+            results = []
+            iterator = self.stub.get_query_result(query)
+            
+            for result in iterator:
+                try:
+                    value = json.loads(result.value.decode('utf-8'))
+                    results.append({
+                        "key": result.key,
+                        "value": value
+                    })
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Ошибка декодирования результата запроса: {str(e)}")
+            
+            iterator.close()
+            logger.debug(f"Получено {len(results)} записей по запросу")
+            return results
+        
+        except Exception as e:
+            logger.error(f"Ошибка при выполнении запроса {query}: {str(e)}")
+            return []
+
+    def get_query_result_with_pagination(self, query: str, page_size: int, bookmark: str) -> Dict[str, Any]:
+        """
+        Выполнить rich query с пагинацией
+        """
+        try:
+            results = []
+            iterator, metadata = self.stub.get_query_result_with_pagination(query, page_size, bookmark)
+            
+            for result in iterator:
+                try:
+                    value = json.loads(result.value.decode('utf-8'))
+                    results.append({
+                        "key": result.key,
+                        "value": value
+                    })
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Ошибка декодирования результата пагинированного запроса: {str(e)}")
+            
+            iterator.close()
+            
+            return {
+                "results": results,
+                "fetched_records_count": metadata.fetched_records_count,
+                "bookmark": metadata.bookmark
+            }
+        
+        except Exception as e:
+            logger.error(f"Ошибка при выполнении пагинированного запроса: {str(e)}")
+            return {"results": [], "fetched_records_count": 0, "bookmark": ""}
+

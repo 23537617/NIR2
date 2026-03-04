@@ -1,13 +1,9 @@
-FROM python:3.10
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    make \
-    && rm -rf /var/lib/apt/lists/*
+# Обновление pip и установка зависимостей
+RUN pip install --upgrade pip
 
 # Обновление pip до последней версии
 RUN pip install --upgrade pip setuptools wheel

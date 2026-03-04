@@ -4,4 +4,5 @@ grpcio>=1.57.0
 grpcio-tools>=1.57.0
 protobuf>=4.23.0
 requests>=2.31.0
+fabric-chaincode-python==0.2.0
 
